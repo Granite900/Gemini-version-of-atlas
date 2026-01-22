@@ -1,93 +1,125 @@
 from ast import literal_eval
 from http.client import responses
-
 from google import genai
 from mouseinfo import screenshot
-
 from api_key import API_KEY
 import json
 import ast
 import pyautogui
+from types import SimpleNamespace
 import pyscreeze
+from time import sleep
 
 GEMINI_API_KEY = API_KEY
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-model = "gemini-3-pro-preview"
+model = "gemini-3-flash-preview"
 
-
+screen_w, screen_h = pyautogui.size()
+resolution = f"{screen_w}x{screen_h}"
 
 def beep_boop():
     request = input("Prompt:  ")
     screenshot = pyautogui.screenshot()
-    library = "click(x, y), type(\"string\")"
+    library = "click(x, y), type(\"string\"), press(\"key\")"
     prompt = (f"""
 ### SYSTEM IDENTITY & OBJECTIVE
-You are an intelligent autonomous agent known as "Atlas." Your goal is to satisfy the user's specific objective by controlling a computer interface.
+You are "Atlas," a precision-focused autonomous agent. Your goal is to control a computer interface by analyzing visual inputs and executing actions.
 
 ### INPUT VARIABLES
-You will receive data in three specific formats. You must combine these to formulate your answer.
-
 1. **THE OBJECTIVE (request):**
-   This variable contains the user's natural language instruction. You must analyze this string to understand what you need to do.
+   User's instruction:
    <request_context>
    {request}
    </request_context>
 
 2. **THE TOOL LIBRARY (library):**
-   This variable contains the *definitions* of the commands you can use. It shows the command name and the placeholder variables it expects (e.g., x, y, text).
+   Available commands:
    <library_definition>
    {library}
    </library_definition>
 
 3. **THE SCREENSHOT (Visual Context):**
-   You have access to a screenshot of the current screen state. You must treat this image as your visual field to locate elements, read text on screen, and determine coordinates.
+   You have access to a screenshot.
+   **Screen Resolution:** {resolution}
 
-### RULES FOR VARIABLE REPLACEMENT
-The library displays commands with **abstract placeholder variables** (like x, y, or text). Your job is to extract **concrete values** from the {request} and the **Screenshot** to replace the placeholders.
+### CRITICAL RULES FOR COORDINATE ACCURACY
+You must strictly follow these rules to calibrate your aim:
 
-* **Visual Grounding:** IF the request names an element (e.g., "Click the Search Bar"), you must analyze the **Screenshot** to find the (x, y) coordinates of that element.
-* **Logic:** IF Request = "Click top left" -> AND Screenshot shows top left is (0,0) -> THEN command = click(0, 0)
-* **Logic:** Request = "Type 'admin'" -> THEN command = type('admin')
+1. **Y-AXIS CORRECTION (The +60 Offset):**
+   * **Calibration:** Previous attempts were clicking "too high" by 120px when using a negative offset.
+   * **Correction:** You must **ADD 60 PIXELS** to the calculated center to shift the aim down.
+   * **Formula:** Target Y = (Top_Edge + Height * 0.50) + 60.
+   * **Visual Aim:** Locate the geometric center, then shift your target DOWN by 60 pixels.
+
+2. **Label vs. Container:**
+   * IF the user says "Click Email," find the text "Email," but click the **input box** next to/below it.
+   * Do NOT click the text. Click the container.
+
+3. **Coordinate Grid:**
+   * Map the image to a grid. (0,0) is TOP-Left.
+   * **Important:** Increasing Y moves the click DOWN.
 
 ### RESPONSE FORMAT
-You must respond ONLY in strict JSON format. Do not use Markdown, code blocks, or conversational filler.
+Respond ONLY in a strict JSON **List (Array)**.
 
 **JSON Schema:**
-{{
-  "thought": "Reasoning: Analyze the Request and Screenshot. Map the intent to a function in library and identify the values for the variables.",
-  "command": "The exact name of the function and the values it needs (e.g. 'click(xVal, yVal').",
-}}
+[
+  {{
+    "thought": "Analysis: Element found at [box coords]. Center Y is [y]. Applying +60px offset. Target: [x, y].",
+    "command": "function(args)"
+  }}
+]
 
 ### EXAMPLES
 
-**Scenario 1 (Explicit Coordinates)**
-* **library:** click(x, y)
-* **request:** "Hit the button at coordinates 250, 500."
+**Scenario 1 (Button Click)**
+* **library:** click(x, y), type(text)
+* **resolution:** 1920x1080
+* **request:** "Click the 'Submit' button."
 * **Agent Output:**
-    {{
-      "thought": "The request specifies coordinates 250 and 500. I will replace the library variables x and y with these integers.",
-      "command": "click(250, 500)"
-    }}
+    [
+      {{
+        "thought": "I found the 'Submit' button. Bounding box Top:600, Bottom:650 (Height=50). Center Y is 625. Applying +60px offset. Target Y = 685.",
+        "command": "click(960, 685)"
+      }}
+    ]
 
-**Scenario 2 (Text Input)**
-* **library:** type(text)
-* **request:** "Write 'Hello World' into the chat box."
+**Scenario 2 (Form Entry)**
+* **library:** click(x, y), type(text)
+* **resolution:** 1920x1080
+* **request:** "Type 'Hello' in the Chat."
 * **Agent Output:**
-    {{
-      "thought": "The request provides a string. I will replace the library variable 'text' with 'Hello World'.",
-      "command": "type(\"Hello World\")"
-    }}
-
-**Scenario 3 (Visual Inference)**
-* **library:** click(x, y)
-* **request:** "Click on the Blue Submit Button."
+    [
+      {{
+        "thought": "Found chat input. Box Top:900, Height 50. Center Y is 925. +60px offset => 985.",
+        "command": "click(950, 985)"
+      }},
+      {{
+        "thought": "Field focused. Typing text.",
+        "command": "type(\"Hello\")"
+      }}
+    ]
+**Scenario 3 (Form Entry)**
+* **library:** click(x, y), type(text)
+* **resolution:** 1920x1080
+* **request:** "Google how to make cookies."
 * **Agent Output:**
-    {{
-      "thought": "The user wants to click the 'Submit' button. visual analysis of the screenshot shows the blue button is centered at x=800, y=600.",
-      "command": "click(800, 600)"
-    }}
+    [
+        {{
+            "thought": "Found search input. Box Top:900, Height 50. Center Y is 925. +60px offset => 985.",
+            "command": "click(960, 453)"
+        }},
+        {{
+            "thought": "Field focused. Typing text.",
+            "command": "type(\"How to make cookies.\")"
+        }}
+        {{
+            "thought": "Pressing enter to search"
+            "command": "press(\"enter\")"
+        }}
+    ]
 """)
 
     response = client.models.generate_content(
@@ -96,9 +128,9 @@ You must respond ONLY in strict JSON format. Do not use Markdown, code blocks, o
     )
 
     print(response.text)
-    data = json.loads(response.text)
 
-    return data["command"]
+    return json.loads(response.text, object_hook=lambda d: SimpleNamespace(**d))
+
 
 def parsnip_string(command_str):
     command, args_str = command_str.split('(', 1)
@@ -112,19 +144,20 @@ def parsnip_string(command_str):
 
 
 def dew_it():
-    if command == "click":
-        x, y = inputs
-        pyautogui.click(x, y)
-    elif command == "type":
-        string = str(inputs)
-        pyautogui.write(string)
+    for step in commands:
+        command, inputs = parsnip_string(step.command)
+        if command == "click":
+            x, y = inputs
+            pyautogui.click(x, y)
+        elif command == "type":
+            string = str(inputs)
+            pyautogui.write(string)
+        elif command == "press":
+            string = str(inputs)
+            pyautogui.press(string)
 
 
 
 if __name__ == '__main__':
-    command_str = beep_boop()
-    command, inputs = parsnip_string(command_str)
-#    print(command)
- #   print("-----")
-  #  print(inputs)
+    commands = beep_boop()
     dew_it()
